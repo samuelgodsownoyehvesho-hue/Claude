@@ -1,0 +1,6 @@
+{
+  "name": "Lyric Video Generator",
+  "description": "Create professional kinetic typography lyric videos from your audio with automated Whisper-style transcription and 4K 60fps export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
