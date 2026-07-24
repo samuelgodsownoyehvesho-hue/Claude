@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Play, Sparkles, Flame, ArrowRight, Mail, 
   LogIn, Lock, Check, ShieldAlert, Heart, Users, Compass, Laptop, 
-  Video, Radio, Globe, Search, RefreshCw, Key, ShieldCheck, UserCheck, 
+  Video, Radio, Globe, Search, RefreshCw, Key, UserCheck, 
   Music, Eye, Sliders, Film, LayoutTemplate
 } from "lucide-react";
 import { Template } from "../types";
@@ -11,9 +11,8 @@ import { TEMPLATES } from "../templates";
 import {
   signInWithGoogle,
   signInWithSpotify,
-  sendEmailOtp,
-  verifyEmailOtp,
-  supabase,
+  signUpWithPassword,
+  signInWithPassword,
   createUserProfileInCloud,
 } from "../lib/supabase";
 
@@ -37,11 +36,11 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
   const [authMethod, setAuthMethod] = useState<"none" | "email">("none");
   const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
 
-  // Email form states (Unified Passwordless Flow)
-  const [emailStep, setEmailStep] = useState<"email" | "code" | "name">("email");
+  // Email + password form states
+  const [emailStep, setEmailStep] = useState<"form" | "check-inbox">("form");
+  const [authFormMode, setAuthFormMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState<string>("");
-  const [code, setCode] = useState<string>("");
-  const [emailName, setEmailName] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
   const [emailError, setEmailError] = useState<string>("");
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
   const [cooldown, setCooldown] = useState<number>(0);
@@ -154,53 +153,24 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
     signInWithSpotify();
   };
 
-  const handleSendCode = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!email) {
-      setEmailError("Email is required.");
-      return;
-    }
-
-    setIsAuthLoading(true);
-    setEmailError("");
-    try {
-      const { error } = await sendEmailOtp(email.trim());
-      if (error) throw error;
-
-      setEmailStep("code");
-      setCooldown(60);
-    } catch (err: any) {
-      setEmailError(err.message || "Failed to send verification code. Please check details and try again.");
-    } finally {
-      setIsAuthLoading(false);
-    }
-  };
-
-  const handleVerifyCode = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!code) {
-      setEmailError("Verification code is required.");
+    if (!email || !password) {
+      setEmailError("Email and password are required.");
       return;
     }
 
     setIsAuthLoading(true);
     setEmailError("");
     try {
-      const { data, error } = await verifyEmailOtp(email.trim(), code.trim());
+      const { data, error } = await signInWithPassword(email.trim(), password);
       if (error) throw error;
 
       const user = data.user;
-      if (!user) throw new Error("Verification succeeded but no user was returned.");
+      if (!user) throw new Error("Login succeeded but no user was returned.");
 
-      const hasName = !!(user.user_metadata?.name || user.user_metadata?.full_name);
-      if (!hasName) {
-        // First-time signup: ask for a display name before finishing.
-        setEmailStep("name");
-        return;
-      }
-
-      const name = user.user_metadata.name || user.user_metadata.full_name;
-      const avatarUrl = user.user_metadata.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${name}`;
+      const name = user.user_metadata?.name || user.user_metadata?.full_name || user.email!.split("@")[0];
+      const avatarUrl = user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${name}`;
 
       await createUserProfileInCloud(user.id, {
         name,
@@ -222,37 +192,42 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
         onApplyTemplate(pendingTemplate);
       }
     } catch (err: any) {
-      setEmailError(err.message || "Invalid or expired code. Please try again.");
+      setEmailError(err.message || "Incorrect email or password.");
     } finally {
       setIsAuthLoading(false);
     }
   };
 
-  const handleFinishSignUp = async (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!emailName.trim()) {
-      setEmailError("Name is required.");
+    if (!email || !password) {
+      setEmailError("Email and password are required.");
+      return;
+    }
+    if (password.length < 6) {
+      setEmailError("Password must be at least 6 characters.");
       return;
     }
 
     setIsAuthLoading(true);
     setEmailError("");
     try {
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const user = userData.user;
-      if (!user) throw new Error("Your session expired. Please try signing in again.");
+      const { data, error } = await signUpWithPassword(email.trim(), password);
+      if (error) throw error;
 
-      const finalName = emailName.trim();
-      const avatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${finalName}`;
+      // If email confirmation is required, Supabase returns a user but no
+      // active session yet — the person needs to click the emailed link.
+      if (!data.session) {
+        setEmailStep("check-inbox");
+        return;
+      }
 
-      const { error: updateErr } = await supabase.auth.updateUser({
-        data: { name: finalName, avatar_url: avatarUrl },
-      });
-      if (updateErr) throw updateErr;
+      const user = data.user!;
+      const name = user.user_metadata?.name || user.email!.split("@")[0];
+      const avatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${name}`;
 
       await createUserProfileInCloud(user.id, {
-        name: finalName,
+        name,
         email: user.email,
         avatarUrl,
         provider: "email",
@@ -261,7 +236,7 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
       onStartSession({
         isLoggedIn: true,
         provider: "email",
-        name: finalName,
+        name,
         emailOrPhone: user.email || "",
         avatarUrl,
         userId: user.id,
@@ -271,7 +246,7 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
         onApplyTemplate(pendingTemplate);
       }
     } catch (err: any) {
-      setEmailError(err.message || "Failed to finalize creator account.");
+      setEmailError(err.message || "Failed to create account.");
     } finally {
       setIsAuthLoading(false);
     }
@@ -810,12 +785,17 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
                       </span>
                     </div>
 
-                    {/* Unified passwordless signup/login flow */}
+                    {/* Email + password sign up / log in */}
                     <div className="flex flex-col gap-4">
-                      {emailStep === "email" && (
-                        <form onSubmit={(e) => handleSendCode(e)} className="flex flex-col gap-3.5">
+                      {emailStep === "form" && (
+                        <form
+                          onSubmit={authFormMode === "login" ? handleLogin : handleRegister}
+                          className="flex flex-col gap-3.5"
+                        >
                           <p className="text-slate-400 text-xs">
-                            Enter your email to sign in or register instantly. A verification code will be sent to your inbox.
+                            {authFormMode === "login"
+                              ? "Log in with your email and password."
+                              : "Create a new account with an email and password."}
                           </p>
 
                           <div className="flex flex-col gap-1.5">
@@ -830,112 +810,15 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
                             />
                           </div>
 
-                          {emailError && (
-                            <div className="flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 p-2.5 rounded-xl text-xs mt-1">
-                              <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-rose-400" />
-                              <span className="break-all">{emailError}</span>
-                            </div>
-                          )}
-
-                          <button
-                            type="submit"
-                            disabled={isAuthLoading}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-xl cursor-pointer transition-all mt-2 flex items-center justify-center gap-2"
-                          >
-                            {isAuthLoading ? (
-                              <span className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                            ) : (
-                              <>
-                                <ArrowRight className="w-4 h-4" />
-                                Continue
-                              </>
-                            )}
-                          </button>
-                        </form>
-                      )}
-
-                      {emailStep === "code" && (
-                        <form onSubmit={handleVerifyCode} className="flex flex-col gap-3.5">
-                          <p className="text-slate-400 text-xs">
-                            We've sent a 6-digit confirmation code to <strong className="text-indigo-400">{email}</strong>.
-                          </p>
-
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">6-Digit Verification Code</label>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Password</label>
                             <input
-                              type="text"
+                              type="password"
                               required
-                              maxLength={6}
-                              placeholder="Enter 6-digit code"
-                              value={code}
-                              onChange={(e) => setCode(e.target.value)}
-                              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-center font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 tracking-widest text-lg font-bold"
-                            />
-                          </div>
-
-                          {emailError && (
-                            <div className="flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 p-2.5 rounded-xl text-xs mt-1">
-                              <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-rose-400" />
-                              <span className="break-all">{emailError}</span>
-                            </div>
-                          )}
-
-                          <button
-                            type="submit"
-                            disabled={isAuthLoading}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-xl cursor-pointer transition-all mt-2 flex items-center justify-center gap-2"
-                          >
-                            {isAuthLoading ? (
-                              <span className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                            ) : (
-                              <>
-                                <ShieldCheck className="w-4 h-4" />
-                                Verify & Continue
-                              </>
-                            )}
-                          </button>
-
-                          <div className="flex items-center justify-between text-xs mt-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEmailStep("email");
-                                setCode("");
-                                setEmailError("");
-                              }}
-                              className="text-slate-400 hover:text-slate-200 transition-all font-semibold"
-                            >
-                              Back
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={cooldown > 0 || isAuthLoading}
-                              onClick={() => handleSendCode()}
-                              className={`transition-all font-semibold ${
-                                cooldown > 0 ? "text-slate-600 cursor-not-allowed" : "text-indigo-400 hover:text-indigo-300 cursor-pointer"
-                              }`}
-                            >
-                              {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend Code"}
-                            </button>
-                          </div>
-                        </form>
-                      )}
-
-                      {emailStep === "name" && (
-                        <form onSubmit={handleFinishSignUp} className="flex flex-col gap-3.5">
-                          <p className="text-slate-400 text-xs">
-                            Welcome! Since this is your first time here, what should we call you?
-                          </p>
-
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Creator Display Name</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="e.g. DJ Sonic"
-                              value={emailName}
-                              onChange={(e) => setEmailName(e.target.value)}
+                              minLength={6}
+                              placeholder="••••••••"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
                               className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/50"
                             />
                           </div>
@@ -954,14 +837,54 @@ export default function ExplorationPage({ onStartSession, onApplyTemplate }: Exp
                           >
                             {isAuthLoading ? (
                               <span className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                            ) : authFormMode === "login" ? (
+                              <>
+                                <LogIn className="w-4 h-4" />
+                                Log In
+                              </>
                             ) : (
                               <>
                                 <UserCheck className="w-4 h-4" />
-                                Finish Setup & Enter
+                                Register
                               </>
                             )}
                           </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuthFormMode(authFormMode === "login" ? "register" : "login");
+                              setEmailError("");
+                            }}
+                            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold text-center mt-1"
+                          >
+                            {authFormMode === "login"
+                              ? "Don't have an account? Register"
+                              : "Already have an account? Log In"}
+                          </button>
                         </form>
+                      )}
+
+                      {emailStep === "check-inbox" && (
+                        <div className="flex flex-col gap-3.5">
+                          <p className="text-slate-400 text-xs">
+                            We've sent a confirmation link to <strong className="text-indigo-400">{email}</strong>.
+                            Click it, then come back here and log in.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEmailStep("form");
+                              setAuthFormMode("login");
+                              setPassword("");
+                              setEmailError("");
+                            }}
+                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-4 rounded-xl cursor-pointer transition-all flex items-center justify-center gap-2"
+                          >
+                            <LogIn className="w-4 h-4" />
+                            Back to Log In
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>

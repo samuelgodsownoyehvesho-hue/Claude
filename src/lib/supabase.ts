@@ -61,6 +61,28 @@ export const verifyEmailOtp = async (email: string, token: string) => {
   return supabase.auth.verifyOtp({ email, token, type: "email" });
 };
 
+// ---------------------------------------------------------------------------
+// Email + password helpers (traditional sign up / log in)
+// ---------------------------------------------------------------------------
+
+// Registers a brand-new account with an email + password. If the project has
+// "Confirm email" enabled, no session is returned until the user clicks the
+// confirmation link in their inbox — callers should check data.session.
+export const signUpWithPassword = async (email: string, password: string, name?: string) => {
+  return supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { name: name || email.split("@")[0] },
+    },
+  });
+};
+
+// Logs in an existing email + password account.
+export const signInWithPassword = async (email: string, password: string) => {
+  return supabase.auth.signInWithPassword({ email, password });
+};
+
 export const signOut = async () => {
   return supabase.auth.signOut();
 };
